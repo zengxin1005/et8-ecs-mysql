@@ -36,13 +36,11 @@ namespace ET
         {
             Log.Debug("MySQLComponent Awake");
             
-            // 确保有TimerComponent
             if (self.Scene().GetComponent<TimerComponent>() == null)
             {
                 self.Scene().AddComponent<TimerComponent>();
             }
             
-            // 启动健康检查定时器
             if (self.EnableHealthCheck)
             {
                 self.CheckTimer = self.Scene().GetComponent<TimerComponent>()
@@ -69,22 +67,17 @@ namespace ET
             }
         }
         
-        /// <summary>
-        /// 异步初始化连接池
-        /// </summary>
         public static async ETTask InitializeAsync(this MySQLComponent self)
         {
             try
             {
                 Log.Info("开始初始化MySQL连接池...");
                 
-                // 1. 初始化连接池
                 self.ConnectionPool = new MySQLConnectionPool(
                     self.Scene(),
                     self.ConnectionString, 
                     self.MaxPoolSize);
                 
-                // 2. 预热连接
                 await WarmupPoolAsync(self);
                 
                 Log.Info($"MySQL初始化完成，配置: 最大连接={self.MaxPoolSize}, " +
@@ -98,34 +91,25 @@ namespace ET
             }
         }
         
-        /// <summary>
-        /// 重新加载配置
-        /// </summary>
         public static async ETTask ReloadConfigAsync(this MySQLComponent self)
         {
             try
             {
                 Log.Info("开始重载MySQL配置...");
                 
-                // 停止健康检查
                 self.Scene().GetComponent<TimerComponent>()?.Remove(ref self.CheckTimer);
                 
-                // 保存旧连接池
                 var oldPool = self.ConnectionPool;
                 
-                // 创建新连接池
                 self.ConnectionPool = new MySQLConnectionPool(
                     self.Scene(),
                     self.ConnectionString, 
                     self.MaxPoolSize);
                 
-                // 预热新连接池
                 await WarmupPoolAsync(self);
                 
-                // 释放旧连接池
                 oldPool?.Dispose();
                 
-                // 重启健康检查
                 if (self.EnableHealthCheck)
                 {
                     self.CheckTimer = self.Scene().GetComponent<TimerComponent>()
@@ -141,11 +125,8 @@ namespace ET
             }
         }
         
-        // ========== 查询执行方法（带重试） ==========
+        // ========== 查询执行方法 ==========
         
-        /// <summary>
-        /// 执行查询（带可配置重试）
-        /// </summary>
         public static async ETTask<MySqlDataReader> QueryAsync(this MySQLComponent self, 
             string sql, params MySqlParameter[] parameters)
         {
@@ -158,12 +139,16 @@ namespace ET
             while (true)
             {
                 MySqlConnection connection = null;
+
+                
                 try
                 {
                     connection = await self.ConnectionPool.GetConnectionAsync();
                     var command = CreateCommand(self, connection, sql, parameters);
+                    
                     var reader = await command.ExecuteReaderAsync(CommandBehavior.CloseConnection);
                     
+
                     stopwatch.Stop();
                     self.TotalQueryTime += stopwatch.ElapsedMilliseconds;
                     return reader;
@@ -176,12 +161,18 @@ namespace ET
                     if (retryCount > maxRetries)
                     {
                         Log.Error($"查询重试达到最大次数 {maxRetries}: {ex.Message}");
-                        SafeClose(connection);
+                        self.ConnectionPool.ReleaseConnection(connection, false);
                         throw;
                     }
                     
                     Log.Warning($"查询时连接断开，第{retryCount}次重试: {ex.Message}");
-                    SafeClose(connection);
+                    self.ConnectionPool.ReleaseConnection(connection, false);
+                    
+                    if (IsCriticalConnectionError(ex))
+                    {
+                        Log.Debug("检测到关键连接错误，清理连接池");
+                        ClearConnectionPool(self);
+                    }
                     
                     int delay = self.QueryRetryBaseDelay * (int)Math.Pow(2, retryCount - 1);
                     await WaitAsync(self, Math.Min(delay, 1000));
@@ -189,16 +180,12 @@ namespace ET
                 catch (Exception)
                 {
                     self.FailedQueries++;
-                    if (connection != null) 
-                        self.ConnectionPool.ReleaseConnection(connection);
+                    self.ConnectionPool.ReleaseConnection(connection, false);
                     throw;
                 }
             }
         }
         
-        /// <summary>
-        /// 执行非查询SQL（带重试）
-        /// </summary>
         public static async ETTask<int> ExecuteAsync(this MySQLComponent self, 
             string sql, params MySqlParameter[] parameters)
         {
@@ -211,13 +198,16 @@ namespace ET
             while (true)
             {
                 MySqlConnection connection = null;
+
+                
                 try
                 {
                     connection = await self.ConnectionPool.GetConnectionAsync();
                     var command = CreateCommand(self, connection, sql, parameters);
                     var result = await command.ExecuteNonQueryAsync();
                     
-                    self.ConnectionPool.ReleaseConnection(connection);
+
+                    self.ConnectionPool.ReleaseConnection(connection, true);
                     
                     stopwatch.Stop();
                     self.TotalQueryTime += stopwatch.ElapsedMilliseconds;
@@ -231,12 +221,18 @@ namespace ET
                     if (retryCount > maxRetries)
                     {
                         Log.Error($"执行重试达到最大次数 {maxRetries}: {ex.Message}");
-                        SafeClose(connection);
+                        self.ConnectionPool.ReleaseConnection(connection, false);
                         throw;
                     }
                     
                     Log.Warning($"执行时连接断开，第{retryCount}次重试: {ex.Message}");
-                    SafeClose(connection);
+                    self.ConnectionPool.ReleaseConnection(connection, false);
+                    
+                    if (IsCriticalConnectionError(ex))
+                    {
+                        Log.Debug("检测到关键连接错误，清理连接池");
+                        ClearConnectionPool(self);
+                    }
                     
                     int delay = self.QueryRetryBaseDelay * (int)Math.Pow(2, retryCount - 1);
                     await WaitAsync(self, Math.Min(delay, 1000));
@@ -244,16 +240,12 @@ namespace ET
                 catch (Exception)
                 {
                     self.FailedQueries++;
-                    if (connection != null) 
-                        self.ConnectionPool.ReleaseConnection(connection);
+                    self.ConnectionPool.ReleaseConnection(connection, false);
                     throw;
                 }
             }
         }
         
-        /// <summary>
-        /// 查询单个值（带重试）
-        /// </summary>
         public static async ETTask<T> QueryScalarAsync<T>(this MySQLComponent self, 
             string sql, params MySqlParameter[] parameters)
         {
@@ -266,13 +258,16 @@ namespace ET
             while (true)
             {
                 MySqlConnection connection = null;
+
+                
                 try
                 {
                     connection = await self.ConnectionPool.GetConnectionAsync();
                     var command = CreateCommand(self, connection, sql, parameters);
                     var result = await command.ExecuteScalarAsync();
                     
-                    self.ConnectionPool.ReleaseConnection(connection);
+  
+                    self.ConnectionPool.ReleaseConnection(connection, true);
                     
                     stopwatch.Stop();
                     self.TotalQueryTime += stopwatch.ElapsedMilliseconds;
@@ -290,12 +285,18 @@ namespace ET
                     if (retryCount > maxRetries)
                     {
                         Log.Error($"标量查询重试达到最大次数 {maxRetries}: {ex.Message}");
-                        SafeClose(connection);
+                        self.ConnectionPool.ReleaseConnection(connection, false);
                         throw;
                     }
                     
                     Log.Warning($"标量查询时连接断开，第{retryCount}次重试: {ex.Message}");
-                    SafeClose(connection);
+                    self.ConnectionPool.ReleaseConnection(connection, false);
+                    
+                    if (IsCriticalConnectionError(ex))
+                    {
+                        Log.Debug("检测到关键连接错误，清理连接池");
+                        ClearConnectionPool(self);
+                    }
                     
                     int delay = self.QueryRetryBaseDelay * (int)Math.Pow(2, retryCount - 1);
                     await WaitAsync(self, Math.Min(delay, 1000));
@@ -303,8 +304,7 @@ namespace ET
                 catch (Exception)
                 {
                     self.FailedQueries++;
-                    if (connection != null) 
-                        self.ConnectionPool.ReleaseConnection(connection);
+                    self.ConnectionPool.ReleaseConnection(connection, false);
                     throw;
                 }
             }
@@ -324,7 +324,7 @@ namespace ET
                 try
                 {
                     var conn = await self.ConnectionPool.GetConnectionAsync();
-                    self.ConnectionPool.ReleaseConnection(conn);
+                    self.ConnectionPool.ReleaseConnection(conn, true);
                     successCount++;
                     Log.Debug($"预热连接 {i + 1}/{targetCount} 成功");
                 }
@@ -360,7 +360,6 @@ namespace ET
         {
             if (ex is MySqlException mysqlEx)
             {
-                // MySQL连接错误码
                 int[] connectionErrorCodes = { 
                     2002, 2003, 2006, 2013, 2026, 2048, 2055, 
                     1042, 1043, 1044, 1045, 1046, 1047, 1048, 1049 
@@ -377,6 +376,32 @@ namespace ET
                    ex.Message.Contains("connection", StringComparison.OrdinalIgnoreCase) ||
                    ex.Message.Contains("timeout", StringComparison.OrdinalIgnoreCase) ||
                    ex.Message.Contains("连接", StringComparison.OrdinalIgnoreCase);
+        }
+        
+        private static bool IsCriticalConnectionError(Exception ex)
+        {
+            if (ex is MySqlException mysqlEx)
+            {
+                int[] criticalErrorCodes = { 2006, 2013, 1040, 1042, 1043, 1045 };
+                foreach (var code in criticalErrorCodes)
+                {
+                    if (mysqlEx.Number == code)
+                        return true;
+                }
+            }
+            return false;
+        }
+        
+        private static void ClearConnectionPool(MySQLComponent self)
+        {
+            try
+            {
+                self.ConnectionPool.ForceReconnectAllAsync().Coroutine();
+            }
+            catch (Exception ex)
+            {
+                Log.Warning($"清理连接池失败: {ex.Message}");
+            }
         }
         
         public static void SafeClose(MySqlConnection connection)
@@ -397,13 +422,12 @@ namespace ET
             await self.Scene().GetComponent<TimerComponent>().WaitAsync(time);
         }
         
-        /// <summary>
-        /// 获取连接池状态信息
-        /// </summary>
         public static string GetStatus(this MySQLComponent self)
         {
             if (self.ConnectionPool == null)
                 return "MySQL连接池: 未初始化";
+                
+            var perfStats = self.ConnectionPool.GetPerformanceStats();
                 
             return $"MySQL连接池: 活跃={self.ConnectionPool.ActiveConnections}, " +
                    $"可用={self.ConnectionPool.AvailableConnections}, " +
@@ -412,40 +436,28 @@ namespace ET
                    $"成功率={self.GetQuerySuccessRate():F1}%, " +
                    $"平均耗时={self.GetAverageQueryTime():F1}ms, " +
                    $"重连: 尝试={self.TotalReconnectAttempts}, 成功={self.SuccessfulReconnects}, " +
-                   $"成功率={self.GetReconnectSuccessRate():F1}%";
+                   $"成功率={self.GetReconnectSuccessRate():F1}%, " +
+                   $"\n性能统计: {perfStats}";
         }
         
-        
-        /// <summary>
-        /// 获取重连成功率
-        /// </summary>
         public static float GetReconnectSuccessRate(this MySQLComponent self)
         {
             return self.TotalReconnectAttempts > 0 ? 
                     self.SuccessfulReconnects * 100f / self.TotalReconnectAttempts : 100f;
         }
         
-        /// <summary>
-        /// 获取查询成功率
-        /// </summary>
         public static float GetQuerySuccessRate(this MySQLComponent self)
         {
             return self.TotalQueries > 0 ? 
                     (self.TotalQueries - self.FailedQueries) * 100f / self.TotalQueries : 100f;
         }
         
-        /// <summary>
-        /// 获取平均查询时间（毫秒）
-        /// </summary>
         public static float GetAverageQueryTime(this MySQLComponent self)
         {
             return self.TotalQueries > 0 ? 
                     self.TotalQueryTime * 1.0f / self.TotalQueries : 0f;
         }
         
-        /// <summary>
-        /// 重置统计信息
-        /// </summary>
         public static void ResetStatistics(this MySQLComponent self)
         {
             self.TotalQueries = 0;
@@ -454,6 +466,7 @@ namespace ET
             self.TotalReconnectAttempts = 0;
             self.FailedReconnects = 0;
             self.SuccessfulReconnects = 0;
+            self.ConnectionPool?.ResetPerformanceStats();
             Log.Info("MySQL统计信息已重置");
         }
     }

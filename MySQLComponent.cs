@@ -51,7 +51,5 @@ namespace ET
         public int HealthCheckMaxRetries { get; set; } = 2;        // 健康检查最大重试次数
 
         public long CheckTimer;
-        
-
     }
 }

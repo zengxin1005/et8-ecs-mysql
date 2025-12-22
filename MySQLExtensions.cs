@@ -12,9 +12,6 @@ namespace ET
 {
     public static class MySQLExtensions
     {
-        /// <summary>
-        /// 获取MySQL组件
-        /// </summary>
         public static MySQLComponent MySQL(this Scene scene)
         {
             var mysql = scene.GetComponent<MySQLComponent>();
@@ -25,9 +22,6 @@ namespace ET
             return mysql;
         }
         
-        /// <summary>
-        /// 查询列表
-        /// </summary>
         public static async ETTask<List<T>> QueryListAsync<T>(this MySQLComponent self,
             string sql, params MySqlParameter[] parameters) where T : new()
         {
@@ -63,9 +57,6 @@ namespace ET
             return list;
         }
         
-        /// <summary>
-        /// 分页查询
-        /// </summary>
         public static async ETTask<(List<T> Data, int Total)> QueryPageAsync<T>(
             this MySQLComponent db, 
             string table, 
@@ -87,9 +78,6 @@ namespace ET
             return (data, total);
         }
         
-        /// <summary>
-        /// 检查表是否存在
-        /// </summary>
         public static async ETTask<bool> TableExistsAsync(this MySQLComponent db, string tableName)
         {
             var result = await db.QueryScalarAsync<int>(
@@ -99,9 +87,6 @@ namespace ET
             return result > 0;
         }
         
-        /// <summary>
-        /// 执行事务
-        /// </summary>
         public static async ETTask<bool> ExecuteTransactionAsync(this MySQLComponent self,
             Func<MySqlConnection, ETTask<bool>> transactionFunc)
         {
@@ -115,6 +100,7 @@ namespace ET
             {
                 MySqlConnection connection = null;
                 MySqlTransaction transaction = null;
+                bool executionSuccess = false;
                 
                 try
                 {
@@ -126,19 +112,21 @@ namespace ET
                     if (success)
                     {
                         await transaction.CommitAsync();
+                        executionSuccess = true;
                     }
                     else
                     {
                         await transaction.RollbackAsync();
+                        executionSuccess = false;
                     }
                     
-                    self.ConnectionPool.ReleaseConnection(connection);
+                    self.ConnectionPool.ReleaseConnection(connection, executionSuccess);
                     
                     stopwatch.Stop();
                     self.TotalQueryTime += stopwatch.ElapsedMilliseconds;
                     return success;
                 }
-                catch (Exception ex) when (IsConnectionException(ex))
+                catch (Exception ex) when (MySQLSystem.IsConnectionException(ex))
                 {
                     self.FailedQueries++;
                     retryCount++;
@@ -147,31 +135,27 @@ namespace ET
                     {
                         Log.Error($"事务重试达到最大次数 {maxRetries}: {ex.Message}");
                         try { transaction?.Rollback(); } catch { }
-                        SafeClose(connection);
+                        self.ConnectionPool.ReleaseConnection(connection, false);
                         throw;
                     }
                     
                     Log.Warning($"事务执行时连接断开，第{retryCount}次重试: {ex.Message}");
                     try { transaction?.Rollback(); } catch { }
-                    SafeClose(connection);
+                    self.ConnectionPool.ReleaseConnection(connection, false);
                     
                     int delay = self.QueryRetryBaseDelay * (int)Math.Pow(2, retryCount - 1);
-                    await WaitAsync(self, Math.Min(delay, 1000));
+                    await MySQLSystem.WaitAsync(self, Math.Min(delay, 1000));
                 }
                 catch (Exception)
                 {
                     self.FailedQueries++;
                     try { transaction?.Rollback(); } catch { }
-                    if (connection != null) 
-                        self.ConnectionPool.ReleaseConnection(connection);
+                    self.ConnectionPool.ReleaseConnection(connection, false);
                     throw;
                 }
             }
         }
         
-        /// <summary>
-        /// 插入实体
-        /// </summary>
         public static async ETTask<long> InsertAsync<T>(this MySQLComponent db, 
             T entity, string tableName = null) where T : class
         {
@@ -201,21 +185,6 @@ namespace ET
             await db.ExecuteAsync(sql, parameters.ToArray());
             
             return await db.QueryScalarAsync<long>("SELECT LAST_INSERT_ID()");
-        }
-        
-        private static bool IsConnectionException(Exception ex)
-        {
-            return MySQLSystem.IsConnectionException(ex);
-        }
-        
-        private static void SafeClose(MySqlConnection connection)
-        {
-            MySQLSystem.SafeClose(connection);
-        }
-        
-        private static async ETTask WaitAsync(MySQLComponent self, long time)
-        {
-            await MySQLSystem.WaitAsync(self, time);
         }
     }
 }
