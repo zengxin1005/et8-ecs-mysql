@@ -301,10 +301,24 @@ namespace ET
                     int delay = self.QueryRetryBaseDelay * (int)Math.Pow(2, retryCount - 1);
                     await WaitAsync(self, Math.Min(delay, 1000));
                 }
-                catch (Exception)
+                catch (Exception ex)
                 {
                     self.FailedQueries++;
-                    self.ConnectionPool.ReleaseConnection(connection, false);
+                    // 连接很可能是好的（除非是TimeoutException等边界情况）
+                    bool connectionIsHealthy = 
+                    !(ex is TimeoutException) &&
+                    connection?.State == ConnectionState.Open;
+                    
+                    self.ConnectionPool.ReleaseConnection(connection, connectionIsHealthy);
+                    stopwatch.Stop();
+                    self.TotalQueryTime += stopwatch.ElapsedMilliseconds;
+                    
+                    // 记录详细的错误信息
+                    if (ex is MySqlException mysqlEx)
+                    {
+                        Log.Error($"MySQL错误 [{mysqlEx.Number}]: {mysqlEx.Message}\nSQL: {sql}");
+                    }
+                    
                     throw;
                 }
             }
