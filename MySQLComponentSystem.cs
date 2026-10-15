@@ -91,7 +91,7 @@ namespace ET.Server
         /// <summary>
         /// 使用连接执行函数（自动归还）
         /// </summary>
-        public static async Task<T> WithConnection<T>(this MySQLComponent self, Func<MySqlConnection, Task<T>> func)
+        public static async ETTask<T> WithConnection<T>(this MySQLComponent self, Func<MySqlConnection, Task<T>> func)
         {
             var conn = self.RentConnection();
             try
@@ -107,7 +107,7 @@ namespace ET.Server
         /// <summary>
         /// 使用连接执行函数（无返回值）
         /// </summary>
-        public static async Task WithConnection(this MySQLComponent self, Func<MySqlConnection, Task> func)
+        public static async ETTask WithConnection(this MySQLComponent self, Func<MySqlConnection, Task> func)
         {
             var conn = self.RentConnection();
             try
@@ -132,10 +132,13 @@ namespace ET.Server
             tableName ??= typeof(T).Name;
             string sql = $"SELECT * FROM `{tableName}` WHERE Id = @id LIMIT 1";
             
-            return await self.WithConnection(async conn =>
+            using (await self.Root().GetComponent<CoroutineLockComponent>().Wait(CoroutineLockType.MySql, id % DBComponent.TaskCount))
             {
-                return await conn.QueryFirstOrDefaultAsync<T>(sql, new { id });
-            });
+                return await self.WithConnection(async conn =>
+                {
+                    return await conn.QueryFirstOrDefaultAsync<T>(sql, new { id });
+                });
+            }
         }
         
         /// <summary>
@@ -150,11 +153,14 @@ namespace ET.Server
                 sql += $" WHERE {where}";
             }
             
-            return await self.WithConnection(async conn =>
+            using (await self.Root().GetComponent<CoroutineLockComponent>().Wait(CoroutineLockType.MySql, RandomGenerator.RandInt64() % DBComponent.TaskCount))
             {
-                var result = await conn.QueryAsync<T>(sql, param);
-                return result.AsList();
-            });
+                return await self.WithConnection(async conn =>
+                {
+                    var result = await conn.QueryAsync<T>(sql, param);
+                    return result.AsList();
+                });
+            }
         }
         
         /// <summary>
@@ -170,10 +176,13 @@ namespace ET.Server
             }
             sql += " LIMIT 1";
             
-            return await self.WithConnection(async conn =>
+            using (await self.Root().GetComponent<CoroutineLockComponent>().Wait(CoroutineLockType.MySql, RandomGenerator.RandInt64() % DBComponent.TaskCount))
             {
-                return await conn.QueryFirstOrDefaultAsync<T>(sql, param);
-            });
+                return await self.WithConnection(async conn =>
+                {
+                    return await conn.QueryFirstOrDefaultAsync<T>(sql, param);
+                });
+            }
         }
         
         /// <summary>
@@ -205,11 +214,14 @@ namespace ET.Server
                 sql += $" LIMIT {limit}";
             }
             
-            return await self.WithConnection(async conn =>
+            using (await self.Root().GetComponent<CoroutineLockComponent>().Wait(CoroutineLockType.MySql, RandomGenerator.RandInt64() % DBComponent.TaskCount))
             {
-                var result = await conn.QueryAsync<T>(sql, param);
-                return result.AsList();
-            });
+                return await self.WithConnection(async conn =>
+                {
+                    var result = await conn.QueryAsync<T>(sql, param);
+                    return result.AsList();
+                });
+            }
         }
         
         /// <summary>
@@ -242,13 +254,16 @@ namespace ET.Server
             
             dataSql += $" LIMIT {offset}, {pageSize}";
             
-            return await self.WithConnection(async conn =>
+            using (await self.Root().GetComponent<CoroutineLockComponent>().Wait(CoroutineLockType.MySql, RandomGenerator.RandInt64() % DBComponent.TaskCount))
             {
-                using var multi = await conn.QueryMultipleAsync($"{countSql}; {dataSql}", param);
-                int total = await multi.ReadFirstAsync<int>();
-                var items = (await multi.ReadAsync<T>()).AsList();
-                return (items, total);
-            });
+                return await self.WithConnection(async conn =>
+                {
+                    using var multi = await conn.QueryMultipleAsync($"{countSql}; {dataSql}", param);
+                    int total = await multi.ReadFirstAsync<int>();
+                    var items = (await multi.ReadAsync<T>()).AsList();
+                    return (items, total);
+                });
+            }
         }
         
         /// <summary>
@@ -264,11 +279,14 @@ namespace ET.Server
             
             string sql = $"SELECT * FROM `{tableName}` WHERE Id IN @ids";
             
-            return await self.WithConnection(async conn =>
+            using (await self.Root().GetComponent<CoroutineLockComponent>().Wait(CoroutineLockType.MySql, RandomGenerator.RandInt64() % DBComponent.TaskCount))
             {
-                var result = await conn.QueryAsync<T>(sql, new { ids = idList });
-                return result.AsList();
-            });
+                return await self.WithConnection(async conn =>
+                {
+                    var result = await conn.QueryAsync<T>(sql, new { ids = idList });
+                    return result.AsList();
+                });
+            }
         }
         
         /// <summary>
@@ -276,11 +294,14 @@ namespace ET.Server
         /// </summary>
         public static async ETTask<List<T>> QuerySql<T>(this MySQLComponent self, string sql, object param = null)
         {
-            return await self.WithConnection(async conn =>
+            using (await self.Root().GetComponent<CoroutineLockComponent>().Wait(CoroutineLockType.MySql, RandomGenerator.RandInt64() % DBComponent.TaskCount))
             {
-                var result = await conn.QueryAsync<T>(sql, param);
-                return result.AsList();
-            });
+                return await self.WithConnection(async conn =>
+                {
+                    var result = await conn.QueryAsync<T>(sql, param);
+                    return result.AsList();
+                });
+            }
         }
         
         /// <summary>
@@ -288,11 +309,14 @@ namespace ET.Server
         /// </summary>
         public static async ETTask<List<dynamic>> QueryDynamic(this MySQLComponent self, string sql, object param = null)
         {
-            return await self.WithConnection(async conn =>
+            using (await self.Root().GetComponent<CoroutineLockComponent>().Wait(CoroutineLockType.MySql, RandomGenerator.RandInt64() % DBComponent.TaskCount))
             {
-                var result = await conn.QueryAsync(sql, param);
-                return result.AsList();
-            });
+                return await self.WithConnection(async conn =>
+                {
+                    var result = await conn.QueryAsync(sql, param);
+                    return result.AsList();
+                });
+            }
         }
         
         #endregion
@@ -304,10 +328,13 @@ namespace ET.Server
         /// </summary>
         public static async ETTask<int> Execute(this MySQLComponent self, string sql, object param = null)
         {
-            return await self.WithConnection(async conn =>
+            using (await self.Root().GetComponent<CoroutineLockComponent>().Wait(CoroutineLockType.MySql, RandomGenerator.RandInt64() % DBComponent.TaskCount))
             {
-                return await conn.ExecuteAsync(sql, param);
-            });
+                return await self.WithConnection(async conn =>
+                {
+                    return await conn.ExecuteAsync(sql, param);
+                });
+            }
         }
         
         /// <summary>
@@ -328,10 +355,16 @@ namespace ET.Server
             
             string sql = $"INSERT INTO `{tableName}` ({columns}) VALUES ({values})";
             
-            return await self.WithConnection(async conn =>
+            var idProp = typeof(T).GetProperty("Id");
+            long id = idProp?.GetValue(entity) is long v ? v : 0;
+
+            using (await self.Root().GetComponent<CoroutineLockComponent>().Wait(CoroutineLockType.MySql, id % DBComponent.TaskCount))
             {
-                return await conn.ExecuteAsync(sql, entity);
-            });
+                return await self.WithConnection(async conn =>
+                {
+                    return await conn.ExecuteAsync(sql, entity);
+                });
+            }
         }
         
         /// <summary>
@@ -355,10 +388,13 @@ namespace ET.Server
             
             string sql = $"INSERT INTO `{tableName}` ({columns}) VALUES ({values})";
             
-            return await self.WithConnection(async conn =>
+            using (await self.Root().GetComponent<CoroutineLockComponent>().Wait(CoroutineLockType.MySql, RandomGenerator.RandInt64() % DBComponent.TaskCount))
             {
-                return await conn.ExecuteAsync(sql, list);
-            });
+                return await self.WithConnection(async conn =>
+                {
+                    return await conn.ExecuteAsync(sql, list);
+                });
+            }
         }
         
         /// <summary>
@@ -379,10 +415,16 @@ namespace ET.Server
             
             string sql = $"UPDATE `{tableName}` SET {setClause} WHERE Id = @Id";
             
-            return await self.WithConnection(async conn =>
+            var idProp = typeof(T).GetProperty("Id");
+            long id = idProp?.GetValue(entity) is long v ? v : 0;
+
+            using (await self.Root().GetComponent<CoroutineLockComponent>().Wait(CoroutineLockType.MySql, id % DBComponent.TaskCount))
             {
-                return await conn.ExecuteAsync(sql, entity);
-            });
+                return await self.WithConnection(async conn =>
+                {
+                    return await conn.ExecuteAsync(sql, entity);
+                });
+            }
         }
         
         /// <summary>
@@ -407,10 +449,16 @@ namespace ET.Server
                 INSERT INTO `{tableName}` ({columns}) VALUES ({values})
                 ON DUPLICATE KEY UPDATE {updates}";
             
-            return await self.WithConnection(async conn =>
+            var idProp = typeof(T).GetProperty("Id");
+            long id = idProp?.GetValue(entity) is long v ? v : 0;
+
+            using (await self.Root().GetComponent<CoroutineLockComponent>().Wait(CoroutineLockType.MySql, id % DBComponent.TaskCount))
             {
-                return await conn.ExecuteAsync(sql, entity);
-            });
+                return await self.WithConnection(async conn =>
+                {
+                    return await conn.ExecuteAsync(sql, entity);
+                });
+            }
         }
         
         /// <summary>
@@ -421,10 +469,13 @@ namespace ET.Server
             tableName ??= typeof(T).Name;
             string sql = $"DELETE FROM `{tableName}` WHERE Id = @id";
             
-            return await self.WithConnection(async conn =>
+            using (await self.Root().GetComponent<CoroutineLockComponent>().Wait(CoroutineLockType.MySql, id % DBComponent.TaskCount))
             {
-                return await conn.ExecuteAsync(sql, new { id });
-            });
+                return await self.WithConnection(async conn =>
+                {
+                    return await conn.ExecuteAsync(sql, new { id });
+                });
+            }
         }
         
         /// <summary>
@@ -439,10 +490,13 @@ namespace ET.Server
                 sql += $" WHERE {where}";
             }
             
-            return await self.WithConnection(async conn =>
+            using (await self.Root().GetComponent<CoroutineLockComponent>().Wait(CoroutineLockType.MySql, RandomGenerator.RandInt64() % DBComponent.TaskCount))
             {
-                return await conn.ExecuteAsync(sql, param);
-            });
+                return await self.WithConnection(async conn =>
+                {
+                    return await conn.ExecuteAsync(sql, param);
+                });
+            }
         }
         
         #endregion
@@ -454,50 +508,55 @@ namespace ET.Server
         /// </summary>
         public static async ETTask<bool> ExecuteTransaction(this MySQLComponent self, Func<MySqlConnection, MySqlTransaction, Task> action)
         {
-            var conn = self.RentConnection();
-            var transaction = await conn.BeginTransactionAsync();
-            
-            try
+            using (await self.Root().GetComponent<CoroutineLockComponent>().Wait(CoroutineLockType.MySql, RandomGenerator.RandInt64() % DBComponent.TaskCount))
             {
-                await action(conn, transaction);
-                await transaction.CommitAsync();
-                return true;
-            }
-            catch (Exception e)
-            {
-                await transaction.RollbackAsync();
-                Log.Error($"事务执行失败: {e}");
-                return false;
-            }
-            finally
-            {
-                self.ReturnConnection(conn);
+                var conn = self.RentConnection();
+                var transaction = await conn.BeginTransactionAsync();
+
+                try
+                {
+                    await action(conn, transaction);
+                    await transaction.CommitAsync();
+                    return true;
+                }
+                catch (Exception e)
+                {
+                    await transaction.RollbackAsync();
+                    Log.Error($"事务执行失败: {e}");
+                    return false;
+                }
+                finally
+                {
+                    self.ReturnConnection(conn);
+                }
             }
         }
-        
         /// <summary>
         /// 执行事务并返回结果
         /// </summary>
         public static async ETTask<T> ExecuteTransaction<T>(this MySQLComponent self, Func<MySqlConnection, MySqlTransaction, Task<T>> func)
         {
-            var conn = self.RentConnection();
-            var transaction = await conn.BeginTransactionAsync();
-            
-            try
+            using (await self.Root().GetComponent<CoroutineLockComponent>().Wait(CoroutineLockType.MySql, RandomGenerator.RandInt64() % DBComponent.TaskCount))
             {
-                var result = await func(conn, transaction);
-                await transaction.CommitAsync();
-                return result;
-            }
-            catch (Exception e)
-            {
-                await transaction.RollbackAsync();
-                Log.Error($"事务执行失败: {e}");
-                throw;
-            }
-            finally
-            {
-                self.ReturnConnection(conn);
+                var conn = self.RentConnection();
+                var transaction = await conn.BeginTransactionAsync();
+
+                try
+                {
+                    var result = await func(conn, transaction);
+                    await transaction.CommitAsync();
+                    return result;
+                }
+                catch (Exception e)
+                {
+                    await transaction.RollbackAsync();
+                    Log.Error($"事务执行失败: {e}");
+                    throw;
+                }
+                finally
+                {
+                    self.ReturnConnection(conn);
+                }
             }
         }
         
@@ -510,12 +569,14 @@ namespace ET.Server
         /// </summary>
         public static async ETTask<T> ExecuteScalar<T>(this MySQLComponent self, string sql, object param = null)
         {
-            return await self.WithConnection(async conn =>
+            using (await self.Root().GetComponent<CoroutineLockComponent>().Wait(CoroutineLockType.MySql, RandomGenerator.RandInt64() % DBComponent.TaskCount))
             {
-                return await conn.ExecuteScalarAsync<T>(sql, param);
-            });
+                return await self.WithConnection(async conn =>
+                {
+                    return await conn.ExecuteScalarAsync<T>(sql, param);
+                });
+            }
         }
-        
         /// <summary>
         /// 查询总数
         /// </summary>
@@ -528,12 +589,14 @@ namespace ET.Server
                 sql += $" WHERE {where}"; 
             }
             
-            return await self.WithConnection(async conn =>
+            using (await self.Root().GetComponent<CoroutineLockComponent>().Wait(CoroutineLockType.MySql, RandomGenerator.RandInt64() % DBComponent.TaskCount))
             {
-                return await conn.ExecuteScalarAsync<long>(sql, param);
-            });
+                return await self.WithConnection(async conn =>
+                {
+                    return await conn.ExecuteScalarAsync<long>(sql, param);
+                });
+            }
         }
-        
         /// <summary>
         /// 判断是否存在
         /// </summary>
@@ -542,11 +605,14 @@ namespace ET.Server
             tableName ??= typeof(T).Name;
             string sql = $"SELECT 1 FROM `{tableName}` WHERE {where} LIMIT 1";
             
-            return await self.WithConnection(async conn =>
+            using (await self.Root().GetComponent<CoroutineLockComponent>().Wait(CoroutineLockType.MySql, RandomGenerator.RandInt64() % DBComponent.TaskCount))
             {
-                var result = await conn.ExecuteScalarAsync<int?>(sql, param);
-                return result.HasValue;
-            });
+                return await self.WithConnection(async conn =>
+                {
+                    var result = await conn.ExecuteScalarAsync<int?>(sql, param);
+                    return result.HasValue;
+                });
+            }
         }
         
         #endregion
@@ -563,13 +629,15 @@ namespace ET.Server
             string splitOn,
             object param = null)
         {
-            return await self.WithConnection(async conn =>
+            using (await self.Root().GetComponent<CoroutineLockComponent>().Wait(CoroutineLockType.MySql, RandomGenerator.RandInt64() % DBComponent.TaskCount))
             {
-                var result = await conn.QueryAsync(sql, map, param, splitOn: splitOn);
-                return result.AsList();
-            });
+                return await self.WithConnection(async conn =>
+                {
+                    var result = await conn.QueryAsync(sql, map, param, splitOn: splitOn);
+                    return result.AsList();
+                });
+            }
         }
-
         /// <summary>
         /// 三表联查
         /// </summary>
@@ -580,11 +648,14 @@ namespace ET.Server
             string splitOn,
             object param = null)
         {
-            return await self.WithConnection(async conn =>
+            using (await self.Root().GetComponent<CoroutineLockComponent>().Wait(CoroutineLockType.MySql, RandomGenerator.RandInt64() % DBComponent.TaskCount))
             {
-                var result = await conn.QueryAsync(sql, map, param, splitOn: splitOn);
-                return result.AsList();
-            });
+                return await self.WithConnection(async conn =>
+                {
+                    var result = await conn.QueryAsync(sql, map, param, splitOn: splitOn);
+                    return result.AsList();
+                });
+            }
         }
         
         #endregion
